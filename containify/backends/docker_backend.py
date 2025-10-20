@@ -1,7 +1,8 @@
 import json
 import os
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 import psutil
 
@@ -108,6 +109,15 @@ def _ensure_running(container_id: str):
 	return container
 
 
+def _get_container(name: str, root_dir: Path):
+	md = read_docker_metadata(name, root_dir)
+	container_id = md.get("backend_data", {}).get("docker", {}).get("container_id")
+	if not container_id:
+		raise RuntimeError("Missing docker container id in metadata")
+	client = _client()
+	return client.containers.get(container_id)
+
+
 def run_in_docker(name: str, root_dir: Path, command: List[str]) -> int:
 	md = read_docker_metadata(name, root_dir)
 	container_id = md.get("backend_data", {}).get("docker", {}).get("container_id")
@@ -123,6 +133,20 @@ def run_in_docker(name: str, root_dir: Path, command: List[str]) -> int:
 		except Exception:
 			# bytes as-is
 			print(output)
+	return int(exec_res.exit_code or 0)
+
+
+def run_in_docker_shell(name: str, root_dir: Path, command_str: str) -> int:
+	container = _get_container(name, root_dir)
+	if container.status != "running":
+		container.start()
+	exec_res = container.exec_run(["/bin/sh", "-lc", command_str], stdout=True, stderr=True, stdin=False, tty=False)
+	out = exec_res.output
+	if out:
+		try:
+			print(out.decode("utf-8"), end="")
+		except Exception:
+			print(out)
 	return int(exec_res.exit_code or 0)
 
 
@@ -168,3 +192,52 @@ def delete_docker_container(name: str, root_dir: Path) -> None:
 	import shutil
 	container_dir = get_container_dir(name, root_dir)
 	shutil.rmtree(container_dir, ignore_errors=True)
+
+
+def start_docker_container(name: str, root_dir: Path) -> None:
+	c = _get_container(name, root_dir)
+	if c.status != "running":
+		c.start()
+
+
+def stop_docker_container(name: str, root_dir: Path) -> None:
+	c = _get_container(name, root_dir)
+	try:
+		c.stop(timeout=10)
+	except Exception:
+		pass
+
+
+def docker_container_stats(name: str, root_dir: Path) -> Dict[str, Any]:
+	c = _get_container(name, root_dir)
+	try:
+		st = c.stats(stream=False)
+		mem_usage = int(st.get('memory_stats', {}).get('usage', 0))
+		mem_limit = int(st.get('memory_stats', {}).get('limit', 0))
+		cpu_percent = 0.0
+		cpu = st.get('cpu_stats', {})
+		pcpu = st.get('precpu_stats', {})
+		# approximate CPU percent
+		total = float(cpu.get('cpu_usage', {}).get('total_usage', 0)) - float(pcpu.get('cpu_usage', {}).get('total_usage', 0))
+		system = float(cpu.get('system_cpu_usage', 0)) - float(pcpu.get('system_cpu_usage', 0))
+		n_cpus = int(cpu.get('online_cpus') or cpu.get('cpu_usage', {}).get('percpu_usage') and len(cpu.get('cpu_usage', {}).get('percpu_usage')) or 1)
+		if system > 0 and n_cpus > 0:
+			cpu_percent = (total / system) * n_cpus * 100.0
+		c.reload()
+		started_at = c.attrs.get('State', {}).get('StartedAt')
+		uptime_s = None
+		if started_at and c.status == 'running':
+			try:
+				dt = datetime.fromisoformat(started_at.replace('Z', '+00:00'))
+				uptime_s = int((datetime.now(timezone.utc) - dt).total_seconds())
+			except Exception:
+				uptime_s = None
+		return {
+			"cpu_percent": cpu_percent,
+			"mem_usage_bytes": mem_usage,
+			"mem_limit_bytes": mem_limit,
+			"uptime_seconds": uptime_s,
+			"status": c.status,
+		}
+	except Exception:
+		return {"cpu_percent": 0.0, "mem_usage_bytes": 0, "mem_limit_bytes": 0, "uptime_seconds": None, "status": c.status}

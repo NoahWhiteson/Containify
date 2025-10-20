@@ -2,8 +2,11 @@ import json
 import os
 import subprocess
 import venv
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
+
+import psutil
 
 from ..utils import (
 	ensure_dir,
@@ -87,6 +90,21 @@ def run_in_local(name: str, root_dir: Path, command: List[str]) -> int:
 	return proc.wait()
 
 
+def run_in_local_shell(name: str, root_dir: Path, command_str: str) -> int:
+	container_dir = get_container_dir(name, root_dir)
+	if not (container_dir / "metadata.json").exists():
+		raise FileNotFoundError(f"Local container '{name}' not found")
+	env = _venv_env(container_dir)
+	cwd = container_dir / "workspace"
+	ensure_dir(cwd)
+	if os.name == "nt":
+		cmd = [os.environ.get("COMSPEC", "cmd.exe"), "/C", command_str]
+	else:
+		cmd = [os.environ.get("SHELL", "/bin/bash"), "-lc", command_str]
+	proc = subprocess.Popen(cmd, cwd=str(cwd), env=env)
+	return proc.wait()
+
+
 def shell_in_local(name: str, root_dir: Path) -> int:
 	container_dir = get_container_dir(name, root_dir)
 	if not (container_dir / "metadata.json").exists():
@@ -123,3 +141,42 @@ def delete_local_container(name: str, root_dir: Path) -> None:
 	# Best-effort recursive delete
 	import shutil
 	shutil.rmtree(container_dir, ignore_errors=True)
+
+
+def start_local_container(name: str, root_dir: Path) -> None:
+	# no-op: local containers are directory + venv. Startup handled by startup command
+	return None
+
+
+def stop_local_container(name: str, root_dir: Path) -> None:
+	# best-effort: kill any known startup process recorded in metadata
+	try:
+		md = read_local_metadata(name, root_dir)
+		pid = (md.get("backend_state", {}) or {}).get("startup_pid")
+		if pid:
+			p = psutil.Process(int(pid))
+			p.terminate()
+			try:
+				p.wait(timeout=5)
+			except psutil.TimeoutExpired:
+				p.kill()
+	except Exception:
+		pass
+
+
+def local_container_stats(name: str, root_dir: Path) -> Dict[str, Any]:
+	# Best-effort from recorded PID, else zeros
+	try:
+		md = read_local_metadata(name, root_dir)
+		pid = (md.get("backend_state", {}) or {}).get("startup_pid")
+		if pid:
+			p = psutil.Process(int(pid))
+			cpu = p.cpu_percent(interval=0.1)
+			mem = p.memory_info().rss
+			uptime = None
+			if p.create_time():
+				uptime = int((datetime.now(timezone.utc).timestamp() - p.create_time()))
+			return {"cpu_percent": cpu, "mem_usage_bytes": int(mem), "uptime_seconds": uptime, "status": "running" if p.is_running() else "stopped"}
+	except Exception:
+		pass
+	return {"cpu_percent": 0.0, "mem_usage_bytes": 0, "uptime_seconds": None, "status": "unknown"}

@@ -29,6 +29,14 @@ from .backends import (
 	run_in_docker,
 	shell_in_docker,
 	read_docker_metadata,
+	run_in_docker_shell,
+	run_in_local_shell,
+	start_local_container,
+	stop_local_container,
+	local_container_stats,
+	start_docker_container,
+	stop_docker_container,
+	docker_container_stats,
 )
 from .fileserver import read_config as fs_read_config, start_background as fs_start, stop as fs_stop, is_running as fs_is_running, serve_forever as fs_serve
 from .settings import read_settings, write_settings
@@ -193,6 +201,9 @@ def enter(ctx: click.Context):
 						q.Choice(title="Run command", value="run"),
 						q.Choice(title="Install packages", value="install"),
 						q.Choice(title="Open workspace folder", value="open_ws"),
+						q.Choice(title="Start", value="start"),
+						q.Choice(title="Stop", value="stop"),
+						q.Choice(title="Set startup command", value="startup"),
 						q.Choice(title="Rename container", value="rename"),
 						q.Choice(title="Edit limits", value="limits"),
 						q.Choice(title="Delete container", value="delete"),
@@ -213,9 +224,9 @@ def enter(ctx: click.Context):
 					backend = md.get("backend")
 					name = md.get("name")
 					if backend == "local":
-						click.get_current_context().exit(run_in_local(name, root_dir, cmd.split()))
+						click.get_current_context().exit(run_in_local_shell(name, root_dir, cmd))
 					else:
-						click.get_current_context().exit(run_in_docker(name, root_dir, cmd.split()))
+						click.get_current_context().exit(run_in_docker_shell(name, root_dir, cmd))
 				elif action == "install":
 					pkgs = _q_text("Packages (space-separated)")
 					backend = md.get("backend")
@@ -228,6 +239,30 @@ def enter(ctx: click.Context):
 					ws = (md.get("paths", {}) or {}).get("workspace_dir")
 					if ws:
 						_open_path(ws)
+				elif action == "start":
+					if md.get("backend") == "local":
+						start_local_container(md.get("name"), root_dir)
+					else:
+						start_docker_container(md.get("name"), root_dir)
+					click.echo(click.style("Started", fg=t["ok"]))
+				elif action == "stop":
+					if md.get("backend") == "local":
+						stop_local_container(md.get("name"), root_dir)
+					else:
+						stop_docker_container(md.get("name"), root_dir)
+					click.echo(click.style("Stopped", fg=t["ok"]))
+				elif action == "startup":
+					cur = (md.get("backend_state", {}) or {}).get("startup_command")
+					new_cmd = _q_text("Startup command (empty to clear)", default=str(cur or ""))
+					import json as _json
+					md_file = get_container_dir(md.get("name"), root_dir) / "metadata.json"
+					data = _json.loads(md_file.read_text(encoding="utf-8"))
+					backend_state = (data.get("backend_state") or {})
+					backend_state["startup_command"] = new_cmd.strip() or None
+					data["backend_state"] = backend_state
+					md_file.write_text(_json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+					md = data
+					click.echo(click.style("Saved", fg=t["ok"]))
 				elif action == "rename":
 					new_name = _q_text("New name", default=str(md.get("name")))
 					validate_container_name(new_name)
@@ -307,14 +342,33 @@ def enter(ctx: click.Context):
 			_kv(t, "Total", len(items))
 			_kv(t, "Local", len([i for i in items if i.get("backend") == "local"]))
 			_kv(t, "Docker", len([i for i in items if i.get("backend") == "docker"]))
+			agg_cpu = []
+			agg_mem = []
 			for md in items:
-				click.echo(click.style("\n- " + md.get("name", ""), fg=t["value"], bold=True))
-				_kv(t, "Backend", md.get("backend"))
-				_kv(t, "Workspace", (md.get("paths", {}) or {}).get("workspace_dir"))
-				lim = md.get("limits", {}) or {}
-				_kv(t, "CPU %", lim.get("cpu_percent"))
-				_kv(t, "RAM MB", lim.get("memory_mb"))
-				_kv(t, "Storage MB", lim.get("storage_mb"))
+				name = md.get("name")
+				if md.get("backend") == "local":
+					st = local_container_stats(name, root_dir)
+				else:
+					st = docker_container_stats(name, root_dir)
+				agg_cpu.append(float(st.get("cpu_percent") or 0.0))
+				agg_mem.append(int(st.get("mem_usage_bytes") or 0))
+				click.echo(click.style("\n- " + name, fg=t["value"], bold=True))
+				_kv(t, "Status", st.get("status"))
+				_kv(t, "CPU %", f"{st.get('cpu_percent'):.1f}")
+				_kv(t, "Mem (MB)", int((st.get("mem_usage_bytes") or 0) / (1024*1024)))
+				upt = st.get("uptime_seconds")
+				_kv(t, "Uptime", upt if upt is not None else "-")
+			# Aggregates
+			_hr(t)
+			_heading(t, "Aggregates")
+			if agg_cpu:
+				_kv(t, "CPU avg%", f"{(sum(agg_cpu)/len(agg_cpu)):.1f}")
+				_kv(t, "CPU max%", f"{max(agg_cpu):.1f}")
+				_kv(t, "CPU min%", f"{min(agg_cpu):.1f}")
+			if agg_mem:
+				_kv(t, "Mem total MB", int(sum(agg_mem)/(1024*1024)))
+				_kv(t, "Mem max MB", int(max(agg_mem)/(1024*1024)))
+				_kv(t, "Mem min MB", int(min(agg_mem)/(1024*1024)))
 			_q_select("Continue", [q.Choice(title="Back", value="back")])
 		elif main_choice == "ftp":
 			click.clear()

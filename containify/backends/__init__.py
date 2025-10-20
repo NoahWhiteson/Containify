@@ -6,6 +6,10 @@ from .local import (
 	run_in_local,
 	shell_in_local,
 	read_local_metadata,
+	run_in_local_shell,
+	start_local_container,
+	stop_local_container,
+	local_container_stats,
 )
 
 from .docker_backend import (
@@ -16,6 +20,10 @@ from .docker_backend import (
 	run_in_docker,
 	shell_in_docker,
 	read_docker_metadata,
+	run_in_docker_shell,
+	start_docker_container,
+	stop_docker_container,
+	docker_container_stats,
 )
 
 __all__ = [
@@ -26,6 +34,10 @@ __all__ = [
 	"run_in_local",
 	"shell_in_local",
 	"read_local_metadata",
+	"run_in_local_shell",
+	"start_local_container",
+	"stop_local_container",
+	"local_container_stats",
 	"create_docker_container",
 	"delete_docker_container",
 	"install_in_docker",
@@ -33,4 +45,8 @@ __all__ = [
 	"run_in_docker",
 	"shell_in_docker",
 	"read_docker_metadata",
+	"run_in_docker_shell",
+	"start_docker_container",
+	"stop_docker_container",
+	"docker_container_stats",
 ]
