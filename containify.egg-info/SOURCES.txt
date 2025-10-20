@@ -1,0 +1,15 @@
+README.md
+pyproject.toml
+./containify/__init__.py
+./containify/cli.py
+./containify/resources.py
+./containify/utils.py
+./containify/backends/__init__.py
+./containify/backends/docker_backend.py
+./containify/backends/local.py
+containify.egg-info/PKG-INFO
+containify.egg-info/SOURCES.txt
+containify.egg-info/dependency_links.txt
+containify.egg-info/entry_points.txt
+containify.egg-info/requires.txt
+containify.egg-info/top_level.txt

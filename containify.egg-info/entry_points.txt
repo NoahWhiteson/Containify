@@ -1,0 +1,2 @@
+[console_scripts]
+containify = containify.cli:main
