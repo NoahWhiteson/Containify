@@ -7,7 +7,7 @@ Containify is a simple, installable Python CLI to create isolated, folder-backed
 - Install locally (editable):
 
 ```bash
-python -m pip install -e .
+pip install git+https://github.com/NoahWhiteson/Containify.git
 ```
 
 - Create a local container:
