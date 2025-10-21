@@ -47,7 +47,7 @@ def _base_metadata(name: str, root_dir: Path, limits: Dict[str, int], container_
 	}
 
 
-def create_docker_container(name: str, root_dir: Path, limits: Dict[str, int]) -> Dict[str, Any]:
+def create_docker_container(name: str, root_dir: Path, limits: Dict[str, int], network: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
 	client = _client()
 	container_dir = get_container_dir(name, root_dir)
 	if container_dir.exists():
@@ -59,6 +59,12 @@ def create_docker_container(name: str, root_dir: Path, limits: Dict[str, int]) -
 	client.images.pull(IMAGE)
 	nano_cpus = _nano_cpus_for_percent(limits.get("cpu_percent", 100))
 	mem_limit = f"{limits.get('memory_mb', 0)}m" if limits.get("memory_mb") else None
+	ports = None
+	if network and network.get("container_port") and network.get("host_port"):
+		container_port = int(network.get("container_port"))
+		host_port = int(network.get("host_port"))
+		host_ip = str(network.get("host_ip") or "0.0.0.0")
+		ports = {f"{container_port}/tcp": (host_ip, host_port)}
 	container = client.containers.create(
 		IMAGE,
 		name=f"containify-{name}",
@@ -68,10 +74,13 @@ def create_docker_container(name: str, root_dir: Path, limits: Dict[str, int]) -
 		volumes={str(workspace): {"bind": "/workspace", "mode": "rw"}},
 		mem_limit=mem_limit,
 		nano_cpus=nano_cpus if nano_cpus > 0 else None,
+		ports=ports,
 		command=["sleep", "infinity"],
 	)
 	container.reload()
 	md = _base_metadata(name, root_dir, limits, container.id)
+	if network:
+		md["network"] = network
 	with (container_dir / "metadata.json").open("w", encoding="utf-8") as f:
 		json.dump(md, f, indent=2, sort_keys=True)
 	return md
@@ -241,3 +250,27 @@ def docker_container_stats(name: str, root_dir: Path) -> Dict[str, Any]:
 		}
 	except Exception:
 		return {"cpu_percent": 0.0, "mem_usage_bytes": 0, "mem_limit_bytes": 0, "uptime_seconds": None, "status": c.status}
+
+
+def recreate_docker_container_with_network(name: str, root_dir: Path) -> None:
+	md = read_docker_metadata(name, root_dir)
+	limits = md.get("limits", {}) or {}
+	network = md.get("network") or None
+	# Remove current container
+	try:
+		delete_docker_container(name, root_dir)
+	except Exception:
+		pass
+	# Recreate metadata directory if removed
+	container_dir = get_container_dir(name, root_dir)
+	ensure_dir(container_dir)
+	# Recreate docker container with ports
+	new_md = create_docker_container(name, root_dir, limits, network=network)
+	# Preserve startup command/backend_state
+	backend_state = md.get("backend_state")
+	if backend_state:
+		import json as _json
+		md_file = container_dir / "metadata.json"
+		data = _json.loads(md_file.read_text(encoding="utf-8"))
+		data["backend_state"] = backend_state
+		md_file.write_text(_json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")

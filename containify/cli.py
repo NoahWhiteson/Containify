@@ -37,6 +37,7 @@ from .backends import (
 	start_docker_container,
 	stop_docker_container,
 	docker_container_stats,
+	recreate_docker_container_with_network,
 )
 from .fileserver import read_config as fs_read_config, start_background as fs_start, stop as fs_stop, is_running as fs_is_running, serve_forever as fs_serve
 from .settings import read_settings, write_settings
@@ -189,6 +190,9 @@ def enter(ctx: click.Context):
 				_hr(t)
 				_kv(t, "Backend", md.get("backend"))
 				_kv(t, "Workspace", (md.get("paths", {}) or {}).get("workspace_dir"))
+				nw = md.get("network") or {}
+				if nw:
+					_kv(t, "Network", f"{nw.get('host_ip','0.0.0.0')}:{nw.get('host_port','-')} -> {nw.get('container_port','-')}/tcp")
 				lim = md.get("limits", {}) or {}
 				_kv(t, "CPU %", lim.get("cpu_percent"))
 				_kv(t, "RAM MB", lim.get("memory_mb"))
@@ -204,8 +208,10 @@ def enter(ctx: click.Context):
 						q.Choice(title="Start", value="start"),
 						q.Choice(title="Stop", value="stop"),
 						q.Choice(title="Set startup command", value="startup"),
+						q.Choice(title="Edit network (ports/IP)", value="network"),
 						q.Choice(title="Rename container", value="rename"),
 						q.Choice(title="Edit limits", value="limits"),
+						q.Choice(title="Preview shell (read-only)", value="preview"),
 						q.Choice(title="Delete container", value="delete"),
 						q.Choice(title="Back", value="back"),
 					],
@@ -263,6 +269,39 @@ def enter(ctx: click.Context):
 					md_file.write_text(_json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
 					md = data
 					click.echo(click.style("Saved", fg=t["ok"]))
+				elif action == "network":
+					cur = md.get("network") or {}
+					ip_version = _q_select("IP version", [q.Choice("ipv4"), q.Choice("ipv6")], default=str(cur.get("ip_version") or "ipv4"))
+					host_ip = _q_text("Host IP (blank for all)", default=str(cur.get("host_ip") or ""))
+					host_port = _q_text("Host port", default=str(cur.get("host_port") or ""))
+					container_port = _q_text("Container port", default=str(cur.get("container_port") or ""))
+					import json as _json
+					md_file = get_container_dir(md.get("name"), root_dir) / "metadata.json"
+					data = _json.loads(md_file.read_text(encoding="utf-8"))
+					network = {
+						"ip_version": ip_version,
+						"host_ip": host_ip or ("::" if ip_version == "ipv6" else "0.0.0.0"),
+						"host_port": int(host_port) if host_port else None,
+						"container_port": int(container_port) if container_port else None,
+					}
+					data["network"] = network
+					md_file.write_text(_json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+					md = data
+					click.echo(click.style("Network saved. Recreating container to apply (docker only)...", fg=t["warn"]))
+					if md.get("backend") == "docker":
+						recreate_docker_container_with_network(md.get("name"), root_dir)
+						click.echo(click.style("Docker container recreated with new ports.", fg=t["ok"]))
+				elif action == "preview":
+					# Preview shell: run a harmless command and print output, no TTY
+					cmd = _q_text("Preview command", default="ls -la")
+					backend = md.get("backend")
+					name = md.get("name")
+					code = 0
+					if backend == "local":
+						code = run_in_local_shell(name, root_dir, cmd)
+					else:
+						code = run_in_docker_shell(name, root_dir, cmd)
+					click.echo(click.style(f"Exit code: {code}", fg=t["hr"]))
 				elif action == "rename":
 					new_name = _q_text("New name", default=str(md.get("name")))
 					validate_container_name(new_name)
@@ -318,10 +357,24 @@ def enter(ctx: click.Context):
 			storage = _q_text("Storage (e.g. 1g)", default=str(read_settings(root_dir)["defaults"]["storage_mb"]))
 			cpu_str = _q_text("CPU % (1-100)", default=str(read_settings(root_dir)["defaults"]["cpu_percent"]))
 			limits = {"memory_mb": parse_size_to_mb(ram), "storage_mb": parse_size_to_mb(storage), "cpu_percent": int(cpu_str)}
+			# Optional network
+			if _q_confirm("Configure network/ports?", default=False):
+				ip_version = _q_select("IP version", [q.Choice("ipv4"), q.Choice("ipv6")], default="ipv4")
+				host_ip = _q_text("Host IP (blank for all)", default="")
+				host_port = _q_text("Host port", default="")
+				container_port = _q_text("Container port", default="")
+				network = {
+					"ip_version": ip_version,
+					"host_ip": host_ip or ("::" if ip_version == "ipv6" else "0.0.0.0"),
+					"host_port": int(host_port) if host_port else None,
+					"container_port": int(container_port) if container_port else None,
+				}
+			else:
+				network = None
 			if backend == "local":
 				md = create_local_container(name, root_dir, limits)
 			else:
-				md = create_docker_container(name, root_dir, limits)
+				md = create_docker_container(name, root_dir, limits, network=network)
 			click.echo(click.style("Created", fg=t["ok"]))
 			_q_select("Continue", [q.Choice(title="Back", value="back")])
 		elif main_choice == "status":
@@ -356,6 +409,9 @@ def enter(ctx: click.Context):
 				_kv(t, "Status", st.get("status"))
 				_kv(t, "CPU %", f"{st.get('cpu_percent'):.1f}")
 				_kv(t, "Mem (MB)", int((st.get("mem_usage_bytes") or 0) / (1024*1024)))
+				nw = md.get("network") or {}
+				if nw:
+					_kv(t, "Port", f"{nw.get('host_ip','0.0.0.0')}:{nw.get('host_port','-')} -> {nw.get('container_port','-')}/tcp")
 				upt = st.get("uptime_seconds")
 				_kv(t, "Uptime", upt if upt is not None else "-")
 			# Aggregates

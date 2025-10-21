@@ -24,6 +24,7 @@ from .docker_backend import (
 	start_docker_container,
 	stop_docker_container,
 	docker_container_stats,
+	recreate_docker_container_with_network,
 )
 
 __all__ = [
@@ -49,4 +50,5 @@ __all__ = [
 	"start_docker_container",
 	"stop_docker_container",
 	"docker_container_stats",
+	"recreate_docker_container_with_network",
 ]
