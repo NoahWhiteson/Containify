@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "containify"
-version = "0.1.0"
+version = "0.1.1"
 description = "Create isolated, folder-backed Python environments with optional Docker resource limits"
 readme = "README.md"
 requires-python = ">=3.9"
