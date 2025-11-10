@@ -1,6 +1,6 @@
 # Containify
 
-An advanced computer environment separator made for `https://github.com/NoahWhiteson/Twilence-Backend`
+An advanced computer environment separator made for [REDACTED]
 
 Containify is a simple, installable Python CLI to create isolated, folder-backed environments ("containers") under a dedicated directory, with optional Docker-based resource limits.
 
